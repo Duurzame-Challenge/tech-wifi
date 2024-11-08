@@ -4,85 +4,80 @@
 
 const char *ssid = "NICK";
 const char *password = "password";
-const char *server = "nickvanhooff.com"; // Server without "http://"
-const int port = 80;                     // Use 80 for HTTP, 443 for HTTPS
+const char *server = "nickvanhooff.com";
+const int port = 80;
 
 WiFiClient wifi;
 HttpClient client = HttpClient(wifi, server, port);
 
-// Define static IP configuration
-IPAddress local_IP(192, 168, 68, 249); // Desired static IP
-IPAddress gateway(192, 168, 68, 1);    // Gateway IP (usually your router)
-IPAddress subnet(255, 255, 255, 0);    // Subnet mask
+// Static IP configuration
+IPAddress local_IP(192, 168, 68, 249);
+IPAddress gateway(192, 168, 68, 1);
+IPAddress subnet(255, 255, 255, 0);
 
 void setup()
 {
     Serial.begin(2000000);
 
     // Connect to Wi-Fi
-    WiFi.begin(ssid, password);
-
-    // Wait for connection
-    while (WiFi.status() != WL_CONNECTED)
-    {
-        delay(1000);
-        Serial.println("Connecting to Wi-Fi...");
-    }
-
-    Serial.println("Connected to Wi-Fi!");
-    Serial.print("IP address: ");
-    Serial.println(WiFi.localIP());
+    connectToWiFi();
 }
 
 void loop()
 {
+    // Check for Wi-Fi connection
     if (WiFi.status() == WL_CONNECTED)
     {
-        delay(1000);
-        Serial.print("IP address: ");
-        Serial.println(WiFi.localIP());
-        GetRequest();
+        // Check if there is incoming data from the barcode scanner
+        if (Serial.available() > 0)
+        {
+            // Read the scanned barcode from Serial
+            String barcode = Serial.readStringUntil('\n');
+            barcode.trim(); // Remove any extraneous newline or whitespace
+            Serial.print("Scanned Barcode: ");
+            Serial.println(barcode);
+
+            // Send the barcode to the server
+            searchProductByBarcode(barcode);
+        }
     }
     else
     {
         Serial.println("Wi-Fi not connected");
     }
-    delay(8000); // Wait 10 seconds before the next request
+    delay(100); // Small delay to avoid overloading the loop
 }
 
-void GetRequest()
+void connectToWiFi()
 {
-    Serial.println("Attempting to connect to server...");
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(1000);
+        Serial.println("Connecting to Wi-Fi...");
+    }
+    Serial.println("Connected to Wi-Fi!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+}
+
+void searchProductByBarcode(const String &barcode)
+{
+    Serial.println("Searching for product by barcode...");
+
+    // Ensure the client is disconnected before a new request
+    client.stop();
 
     if (client.connect(server, port))
     {
-        Serial.println("Connected to server. Making GET request...");
-
-        client.beginRequest();
-        client.get("/DuurzameScannerApi/public/api/products");
-        client.sendHeader("Content-Type", "application/json");
-        client.sendHeader("Accept", "application/json");
-        client.endRequest();
-
+        sendPostRequest(barcode);
         int statusCode = client.responseStatusCode();
         Serial.print("Status code: ");
         Serial.println(statusCode);
 
         if (statusCode == 200)
         {
-            Serial.println("Request successful! Reading response as a buffer:");
-
-            // Buffer to store response chunks
-            const size_t bufferSize = 512;
-            char buffer[bufferSize];
-
-            while (client.available())
-            {
-                int len = client.readBytes(buffer, bufferSize - 1);
-                buffer[len] = '\0';   // Null-terminate the buffer
-                Serial.print(buffer); // Print the buffer
-            }
-            Serial.println(); // Newline for better readability
+            handleResponse();
         }
         else
         {
@@ -94,4 +89,68 @@ void GetRequest()
         Serial.println("Failed to connect to server.");
     }
     client.stop();
+}
+
+void sendPostRequest(const String &barcode)
+{
+    client.beginRequest();
+    client.post("/DuurzameScannerApi/public/api/product-by-barcode");
+
+    // Set headers
+    client.sendHeader("Content-Type", "application/json");
+    client.sendHeader("Accept", "application/json");
+
+    // Send JSON body with the barcode
+    String jsonBody = "{\"barcode\": \"" + barcode + "\"}";
+    Serial.print("Sending JSON data: ");
+    Serial.println(jsonBody);
+
+    client.sendHeader("Content-Length", jsonBody.length());
+    client.beginBody();
+    client.print(jsonBody);
+    client.endRequest();
+}
+
+void handleResponse()
+{
+    Serial.println("Reading response...");
+
+    // Read and store the full response
+    String response = "";
+    const size_t bufferSize = 512;
+    char buffer[bufferSize];
+
+    while (client.available())
+    {
+        int len = client.readBytes(buffer, bufferSize - 1);
+        buffer[len] = '\0';
+        response += buffer;
+    }
+
+    // Print the full response
+    Serial.println("Full response:");
+    Serial.println(response);
+
+    // Check for sustainability information
+    if (response.indexOf("\"sustainabilities\":[]") == -1)
+    {
+        Serial.println("Sustainability information found:");
+        printSustainabilityDetails(response);
+    }
+    else
+    {
+        Serial.println("No sustainability information found for this product.");
+    }
+    Serial.println();
+}
+
+void printSustainabilityDetails(const String &response)
+{
+    int sustainabilitiesStart = response.indexOf("\"sustainabilities\":");
+    if (sustainabilitiesStart != -1)
+    {
+        // Extract and print the sustainabilities part of the response
+        String sustainabilities = response.substring(sustainabilitiesStart);
+        Serial.println(sustainabilities);
+    }
 }
