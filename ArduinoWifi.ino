@@ -1,76 +1,207 @@
-#include <R4HttpClient.h>
-
-//#include <dummy.h>
-
-//#include <Arduino_DebugUtils.h>
-
-//#include <Arduino_ESP32_OTA.h>
-
+#include <WiFiS3.h>
+#include <WiFiClient.h>
 #include <ArduinoHttpClient.h>
 
-#include <UnoWiFiDevEd.h>
-
-#include <WiFiS3.h>
-
-#include <WiFi.h>
-//#include <HTTPClient.h>
-
-const char* ssid = "Redmi 13C";
-const char* password = "mika_2004";    
-String serverPath = "https://nickvanhooff.com";  // Vervang door je eigen API-URL
+const char *ssid = "Mika";
+const char *password = "password";
+const char *server = "nickvanhooff.com";
+const int port = 80;
 
 WiFiClient wifi;
-HttpClient client = HttpClient(wifi, serverPath, 443);
+HttpClient client = HttpClient(wifi, server, port);
 
-// Definieer het statische IP-adres, subnetmasker en gateway
-IPAddress local_IP(192, 168, 68, 249); // Vervang dit door het gewenste IP-adres
-IPAddress gateway(192, 168, 68, 1);     // Vervang dit door het IP-adres van je router
-IPAddress subnet(255, 255, 255, 0);    // Vervang dit door je subnetmasker
+// Static IP configuration
+IPAddress local_IP(192, 168, 68, 249);
+IPAddress gateway(192, 168, 68, 1);
+IPAddress subnet(255, 255, 255, 0);
 
-void setup() {
-    Serial.begin(9600);
+const int PIN_LED_GREEN = 1;
+const int PIN_LED_RED = 2;
+const int PIN_MOTOR = 3;
 
-    // Probeer het statische IP-adres in te stellen
-   // WiFi.config(local_IP, gateway, subnet);
-    // Verbinden met het WiFi-netwerk
-    WiFi.begin(ssid, password);
-
-    // Wacht tot de verbinding is gemaakt
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
-        Serial.println("Verbinden met WiFi...");
-    }
-
-    Serial.print("Verbonden met WiFi!");
-    Serial.print("IP adres: ");
-    Serial.println(WiFi.localIP());
-
-    
-}
-
-void loop() {
-    // Je code hier
-    if (WiFi.status() == WL_CONNECTED) {
-        delay(1000);
-         Serial.print("IP adres: ");
-        Serial.println(WiFi.localIP());
-        GetRequest();
-    }
-}
-
-void GetRequest()
+void setup()
 {
-  Serial.println("making GET request");
-  client.get("/DuurzameScannerApi/public/api/products");
+    Serial.begin(2000000);
+    pinMode(PIN_LED_GREEN, OUTPUT);
+    pinMode(PIN_LED_RED, OUTPUT);
+    pinMode(PIN_MOTOR, OUTPUT);
+    // Connect to Wi-Fi
+    connectToWiFi();
+}
 
-  // read the status code and body of the response
-  int statusCode = client.responseStatusCode();
-  String response = client.responseBody();
+void loop()
+{
+    // Check for Wi-Fi connection
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        // Check if there is incoming data from the barcode scanner
+        if (Serial.available() > 0)
+        {
+            // Read the scanned barcode from Serial
+            String barcode = Serial.readStringUntil('\n');
+            barcode.trim(); // Remove any extraneous newline or whitespace
+            Serial.print("Scanned Barcode: ");
+            Serial.println(barcode);
 
-  Serial.print("Status code: ");
-  Serial.println(statusCode);
-  Serial.print("Response: ");
-  Serial.println(response);
-  Serial.println("Wait five seconds");
-  delay(5000);
+            // Send the barcode to the server
+            searchProductByBarcode(barcode);
+        }
+    }
+    else
+    {
+        Serial.println("Wi-Fi not connected");
+    }
+    delay(100); // Small delay to avoid overloading the loop
+}
+
+void connectToWiFi()
+{
+    WiFi.begin(ssid, password);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        delay(1000);
+        Serial.println("Connecting to Wi-Fi...");
+    }
+    Serial.println("Connected to Wi-Fi!");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+}
+
+void searchProductByBarcode(const String &barcode)
+{
+    Serial.println("Searching for product by barcode...");
+
+    // Ensure the client is disconnected before a new request
+    client.stop();
+
+    if (client.connect(server, port))
+    {
+        sendPostRequest(barcode);
+        int statusCode = client.responseStatusCode();
+        Serial.print("Status code: ");
+        Serial.println(statusCode);
+
+        if (statusCode == 200)
+        {
+            handleResponse();
+        }
+        else
+        {
+            Serial.println("Request failed. Check server or endpoint.");
+        }
+    }
+    else
+    {
+        Serial.println("Failed to connect to server.");
+    }
+    client.stop();
+}
+
+void sendPostRequest(const String &barcode)
+{
+    client.beginRequest();
+    client.post("/DuurzameScannerApi/public/api/product-by-barcode");
+
+    // Set headers
+    client.sendHeader("Content-Type", "application/json");
+    client.sendHeader("Accept", "application/json");
+
+    // Send JSON body with the barcode
+    String jsonBody = "{\"barcode\": \"" + barcode + "\"}";
+    Serial.print("Sending JSON data: ");
+    Serial.println(jsonBody);
+
+    client.sendHeader("Content-Length", jsonBody.length());
+    client.beginBody();
+    client.print(jsonBody);
+    client.endRequest();
+}
+
+void handleResponse()
+{
+    Serial.println("Reading response...");
+
+    // Read and store the full response
+    String response = "";
+    const size_t bufferSize = 512;
+    char buffer[bufferSize];
+
+    while (client.available())
+    {
+        int len = client.readBytes(buffer, bufferSize - 1);
+        buffer[len] = '\0';
+        response += buffer;
+    }
+
+    // Print the full response
+    Serial.println("Full response:");
+    Serial.println(response);
+
+    // Check for sustainability information
+    if (response.indexOf("\"sustainabilities\":[]") == -1)
+    {
+        Serial.println("Sustainability information found:");
+        printSustainabilityDetails(response);
+    }
+    else
+    {
+        Serial.println("No sustainability information found for this product.");
+    }
+
+    // Check for allergen information
+    if (response.indexOf("\"allergens\":[]") == -1)
+    {
+        Serial.println("Allergen information found:");
+        printAllergenDetails(response);
+    }
+    else
+    {
+        Serial.println("No allergen information found for this product.");
+    }
+
+    // Check for alternative products
+    if (response.indexOf("\"alternatives\":[]") == -1)
+    {
+        Serial.println("Alternative products found:");
+        printAlternativeDetails(response);
+    }
+    else
+    {
+        Serial.println("No alternative products found for this product.");
+    }
+
+    Serial.println();
+}
+
+void printSustainabilityDetails(const String &response)
+{
+    int sustainabilitiesStart = response.indexOf("\"sustainabilities\":");
+    if (sustainabilitiesStart != -1)
+    {
+        String sustainabilities = response.substring(sustainabilitiesStart, response.indexOf("]", sustainabilitiesStart) + 1);
+        Serial.println("Sustainabilities:");
+        Serial.println(sustainabilities);
+    }
+}
+
+void printAllergenDetails(const String &response)
+{
+    int allergensStart = response.indexOf("\"allergens\":");
+    if (allergensStart != -1)
+    {
+        String allergens = response.substring(allergensStart, response.indexOf("]", allergensStart) + 1);
+        Serial.println("Allergens:");
+        Serial.println(allergens);
+    }
+}
+
+void printAlternativeDetails(const String &response)
+{
+    int alternativesStart = response.indexOf("\"alternatives\":");
+    if (alternativesStart != -1)
+    {
+        String alternatives = response.substring(alternativesStart, response.indexOf("]", alternativesStart) + 1);
+        Serial.println("Alternatives:");
+        Serial.println(alternatives);
+    }
 }
