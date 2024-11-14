@@ -37,12 +37,12 @@ void loop()
         // Check if there is incoming data from the barcode scanner
         if (Serial.available() > 0)
         {
+          digitalWrite(PIN_MOTOR, HIGH);
             // Read the scanned barcode from Serial
             String barcode = Serial.readStringUntil('\n');
             barcode.trim(); // Remove any extraneous newline or whitespace
             Serial.print("Scanned Barcode: ");
             Serial.println(barcode);
-
             // Send the barcode to the server
             searchProductByBarcode(barcode);
         }
@@ -119,6 +119,8 @@ void sendPostRequest(const String &barcode)
 
 void handleResponse()
 {
+    digitalWrite(PIN_MOTOR, LOW);
+
     Serial.println("Reading response...");
 
     // Read and store the full response
@@ -181,6 +183,13 @@ void printSustainabilityDetails(const String &response)
         String sustainabilities = response.substring(sustainabilitiesStart, response.indexOf("]", sustainabilitiesStart) + 1);
         Serial.println("Sustainabilities:");
         Serial.println(sustainabilities);
+
+        blinkLED(PIN_LED_GREEN);
+    }
+    else
+    {
+      Serial.println("No sustainabilities");
+      blinkLED(PIN_LED_GREEN);
     }
 }
 
@@ -205,3 +214,22 @@ void printAlternativeDetails(const String &response)
         Serial.println(alternatives);
     }
 }
+
+void blinkLED(int ledPin)
+{
+    for (int i = 0; i < 3; i++) // Knipper 3 keer
+    {
+        digitalWrite(ledPin, HIGH);
+        delay(200); // Lampje blijft 200 ms aan
+        digitalWrite(ledPin, LOW);
+        delay(200); // Lampje blijft 200 ms uit
+    }
+}
+// void vibrateMOTOR(int motor)
+// {
+//   digitalWrite(motor, HIGH);
+//   delay (3000);
+//   digitalWrite(motor, LOW);
+
+// }
+
